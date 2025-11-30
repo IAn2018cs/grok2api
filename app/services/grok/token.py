@@ -94,7 +94,14 @@ class GrokTokenManager:
                 return token_type, self.token_data[token_type][sso]
         return None, None
 
-    async def add_token(self, tokens: list[str], token_type: TokenType) -> None:
+    async def add_token(
+        self,
+        tokens: list[str],
+        token_type: TokenType,
+        proxy_url: Optional[str] = None,
+        cache_proxy_url: Optional[str] = None,
+        cf_clearance: Optional[str] = None
+    ) -> None:
         """添加Token"""
         if not tokens:
             return
@@ -113,7 +120,10 @@ class GrokTokenManager:
                 "lastFailureTime": None,
                 "lastFailureReason": None,
                 "tags": [],
-                "note": ""
+                "note": "",
+                "proxy_url": proxy_url or "",
+                "cache_proxy_url": cache_proxy_url or "",
+                "cf_clearance": cf_clearance or ""
             }
             count += 1
 
@@ -148,14 +158,60 @@ class GrokTokenManager:
         """更新Token备注"""
         if token not in self.token_data[token_type.value]:
             raise GrokApiException("Token不存在", "TOKEN_NOT_FOUND", {"token": token[:10]})
-        
+
         self.token_data[token_type.value][token]["note"] = note.strip()
         await self._save_data()
         logger.info(f"[Token] 更新备注: {token[:10]}...")
+
+    async def update_token_proxy(
+        self,
+        token: str,
+        token_type: TokenType,
+        proxy_url: Optional[str] = None,
+        cache_proxy_url: Optional[str] = None,
+        cf_clearance: Optional[str] = None
+    ) -> None:
+        """更新Token代理配置"""
+        if token not in self.token_data[token_type.value]:
+            raise GrokApiException("Token不存在", "TOKEN_NOT_FOUND", {"token": token[:10]})
+
+        token_data = self.token_data[token_type.value][token]
+        if proxy_url is not None:
+            token_data["proxy_url"] = proxy_url.strip()
+        if cache_proxy_url is not None:
+            token_data["cache_proxy_url"] = cache_proxy_url.strip()
+        if cf_clearance is not None:
+            token_data["cf_clearance"] = cf_clearance.strip()
+
+        await self._save_data()
+        logger.info(f"[Token] 更新代理配置: {token[:10]}...")
     
     def get_tokens(self) -> Dict[str, Any]:
         """获取所有Token"""
         return self.token_data.copy()
+
+    def get_token_config(self, auth_token: str) -> Dict[str, str]:
+        """获取Token的配置（代理、CF Clearance等）
+
+        Args:
+            auth_token: 完整的auth token (sso-rw=xxx;sso=xxx)
+
+        Returns:
+            包含proxy_url、cache_proxy_url、cf_clearance的字典
+        """
+        sso = self._extract_sso(auth_token)
+        if not sso:
+            return {"proxy_url": "", "cache_proxy_url": "", "cf_clearance": ""}
+
+        _, data = self._find_token(sso)
+        if not data:
+            return {"proxy_url": "", "cache_proxy_url": "", "cf_clearance": ""}
+
+        return {
+            "proxy_url": data.get("proxy_url", ""),
+            "cache_proxy_url": data.get("cache_proxy_url", ""),
+            "cf_clearance": data.get("cf_clearance", "")
+        }
 
     def get_token(self, model: str) -> str:
         """获取Token"""
@@ -224,12 +280,18 @@ class GrokTokenManager:
         try:
             rate_model = Models.to_rate_limit(model)
             payload = {"requestKind": "DEFAULT", "modelName": rate_model}
-            
-            cf = setting.grok_config.get("cf_clearance", "")
+
+            # 获取token级别的配置
+            token_config = self.get_token_config(auth_token)
+
+            # 构建headers，优先使用token级CF Clearance
+            cf = token_config.get("cf_clearance", "") or setting.grok_config.get("cf_clearance", "")
             headers = get_dynamic_headers("/rest/rate-limits")
             headers["Cookie"] = f"{auth_token};{cf}" if cf else auth_token
 
-            proxy = setting.grok_config.get("proxy_url", "")
+            # 获取代理，优先使用token级代理
+            token_proxy = token_config.get("proxy_url", "")
+            proxy = token_proxy or setting.grok_config.get("proxy_url", "")
             proxies = {"http": proxy, "https": proxy} if proxy else None
             
             async with AsyncSession() as session:

@@ -520,6 +520,33 @@
                         class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none"
                     ></textarea>
                 </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">Proxy URL (服务代理) <span class="text-xs text-muted-foreground">(可选，留空使用全局代理)</span></label>
+                    <input
+                        id="editProxyUrl"
+                        type="text"
+                        placeholder="例如: socks5://127.0.0.1:7890"
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">Cache Proxy URL (缓存代理) <span class="text-xs text-muted-foreground">(可选)</span></label>
+                    <input
+                        id="editCacheProxyUrl"
+                        type="text"
+                        placeholder="例如: socks5://127.0.0.1:7890"
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">CF Clearance <span class="text-xs text-muted-foreground">(可选，留空使用全局CF Clearance)</span></label>
+                    <input
+                        id="editCfClearance"
+                        type="text"
+                        placeholder="例如: 0.123456789.1234567890.abcdef..."
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
             </div>
             <div class="flex items-center justify-end gap-3 p-5 border-t border-border bg-muted/30">
                 <button
@@ -567,6 +594,33 @@
                         class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring font-mono resize-none"
                     ></textarea>
                 </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">Proxy URL (服务代理) <span class="text-xs text-muted-foreground">(可选，留空使用全局代理)</span></label>
+                    <input
+                        id="addProxyUrl"
+                        type="text"
+                        placeholder="例如: socks5://127.0.0.1:7890"
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">Cache Proxy URL (缓存代理) <span class="text-xs text-muted-foreground">(可选，留空使用服务代理或全局代理)</span></label>
+                    <input
+                        id="addCacheProxyUrl"
+                        type="text"
+                        placeholder="例如: socks5://127.0.0.1:7890"
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">CF Clearance <span class="text-xs text-muted-foreground">(可选，留空使用全局CF Clearance)</span></label>
+                    <input
+                        id="addCfClearance"
+                        type="text"
+                        placeholder="例如: 0.123456789.1234567890.abcdef..."
+                        class="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                </div>
             </div>
             <div class="flex items-center justify-end gap-3 p-5 border-t border-border bg-muted/30">
                 <button
@@ -603,17 +657,17 @@
         loadAllTags=async()=>{try{const r=await apiRequest('/api/tokens/tags/all');if(!r)return;const d=await r.json();if(d.success){allTagsList=d.data;const tagFilter=$('filterTag');const currentValue=tagFilter.value;tagFilter.innerHTML='<option value="all">全部标签</option>'+allTagsList.map(tag=>`<option value="${tag}">${tag}</option>`).join('');tagFilter.value=currentValue}}catch(e){console.error('加载标签列表失败:',e)}},
         refreshTokens=async()=>{await loadTokens();await loadStats()},
         openAddModal=()=>$('addModal').classList.remove('hidden'),
-        closeAddModal=()=>{$('addModal').classList.add('hidden');$('addTokenList').value=''},
+        closeAddModal=()=>{$('addModal').classList.add('hidden');$('addTokenList').value='';$('addProxyUrl').value='';$('addCacheProxyUrl').value='';$('addCfClearance').value=''},
         deleteToken=async(t,tt)=>{if(!confirm('确定要删除这个 Token 吗?'))return;try{const r=await apiRequest('/api/tokens/delete',{method:'POST',body:JSON.stringify({tokens:[t],token_type:tt})});if(!r)return;const d=await r.json();d.success?await refreshTokens():showToast('删除失败: '+(d.error||'未知错误'),'error')}catch(e){showToast('删除失败: '+e.message,'error')}},
         batchDelete=async()=>{if(!selectedTokens.size||!confirm(`确定要删除选中的 ${selectedTokens.size} 个 Token 吗?此操作不可恢复!`))return;const tbt={sso:[],ssoSuper:[]};document.querySelectorAll('.token-checkbox:checked').forEach(cb=>tbt[cb.dataset.type].push(cb.dataset.token));try{const ps=[];['sso','ssoSuper'].forEach(k=>tbt[k].length&&ps.push(apiRequest('/api/tokens/delete',{method:'POST',body:JSON.stringify({tokens:tbt[k],token_type:k})})));await Promise.all(ps);await refreshTokens()}catch(e){showToast('批量删除失败: '+e.message,'error')}},
-        submitAddTokens=async()=>{const tt=$('addTokenType').value,tks=$('addTokenList').value.split('\n').map(t=>t.trim()).filter(t=>t);if(!tks.length)return showToast('请输入至少一个 Token','error');try{const r=await apiRequest('/api/tokens/add',{method:'POST',body:JSON.stringify({tokens:tks,token_type:tt})});if(!r)return;const d=await r.json();d.success?(closeAddModal(),await refreshTokens()):showToast('添加失败: '+(d.error||'未知错误'),'error')}catch(e){showToast('添加失败: '+e.message,'error')}},
+        submitAddTokens=async()=>{const tt=$('addTokenType').value,tks=$('addTokenList').value.split('\n').map(t=>t.trim()).filter(t=>t),proxyUrl=$('addProxyUrl').value.trim(),cacheProxyUrl=$('addCacheProxyUrl').value.trim(),cfClearance=$('addCfClearance').value.trim();if(!tks.length)return showToast('请输入至少一个 Token','error');try{const r=await apiRequest('/api/tokens/add',{method:'POST',body:JSON.stringify({tokens:tks,token_type:tt,proxy_url:proxyUrl||null,cache_proxy_url:cacheProxyUrl||null,cf_clearance:cfClearance||null})});if(!r)return;const d=await r.json();d.success?(closeAddModal(),await refreshTokens()):showToast('添加失败: '+(d.error||'未知错误'),'error')}catch(e){showToast('添加失败: '+e.message,'error')}},
         copyToken=async(t,e)=>{e.stopPropagation();try{await navigator.clipboard.writeText(t);showToast('Token 已复制到剪贴板','success')}catch(err){console.error('复制失败:',err);showToast('复制失败,请手动复制','error')}}
         
         let currentEditToken='',currentEditTokenType='';
-        editToken=(token,tokenType)=>{currentEditToken=token;currentEditTokenType=tokenType;const tokenData=allTokens.find(t=>t.token===token);const currentTags=tokenData?.tags||[];const currentNote=tokenData?.note||'';$('editTokenInput').value=token.substring(0,50)+'...';$('editTagsInput').value=currentTags.join(', ');$('editNoteInput').value=currentNote;const suggestedContainer=$('suggestedTags');suggestedContainer.innerHTML='';if(allTagsList.length>0){suggestedContainer.innerHTML='<div class="text-xs text-muted-foreground mb-1">常用标签:</div>'+allTagsList.map(tag=>`<button onclick="addTagToInput('${tag}')" class="inline-flex items-center rounded px-2 py-1 text-xs bg-muted hover:bg-accent transition-colors">${tag}</button>`).join('')}$('editTagsModal').classList.remove('hidden')},
+        editToken=(token,tokenType)=>{currentEditToken=token;currentEditTokenType=tokenType;const tokenData=allTokens.find(t=>t.token===token);const currentTags=tokenData?.tags||[];const currentNote=tokenData?.note||'';const currentProxyUrl=tokenData?.proxy_url||'';const currentCacheProxyUrl=tokenData?.cache_proxy_url||'';const currentCfClearance=tokenData?.cf_clearance||'';$('editTokenInput').value=token.substring(0,50)+'...';$('editTagsInput').value=currentTags.join(', ');$('editNoteInput').value=currentNote;$('editProxyUrl').value=currentProxyUrl;$('editCacheProxyUrl').value=currentCacheProxyUrl;$('editCfClearance').value=currentCfClearance;const suggestedContainer=$('suggestedTags');suggestedContainer.innerHTML='';if(allTagsList.length>0){suggestedContainer.innerHTML='<div class="text-xs text-muted-foreground mb-1">常用标签:</div>'+allTagsList.map(tag=>`<button onclick="addTagToInput('${tag}')" class="inline-flex items-center rounded px-2 py-1 text-xs bg-muted hover:bg-accent transition-colors">${tag}</button>`).join('')}$('editTagsModal').classList.remove('hidden')},
         closeEditModal=()=>{$('editTagsModal').classList.add('hidden');currentEditToken='';currentEditTokenType=''},
         addTagToInput=(tag)=>{const input=$('editTagsInput');const currentValue=input.value.trim();const tags=currentValue?currentValue.split(',').map(t=>t.trim()):[];if(!tags.includes(tag)){tags.push(tag);input.value=tags.join(', ')}},
-        submitEditInfo=async()=>{if(!currentEditToken)return;const tagsInput=$('editTagsInput').value;const note=$('editNoteInput').value.trim();const tags=tagsInput.split(',').map(t=>t.trim()).filter(t=>t);const promises=[];promises.push(apiRequest('/api/tokens/tags',{method:'POST',body:JSON.stringify({token:currentEditToken,token_type:currentEditTokenType,tags})}));promises.push(apiRequest('/api/tokens/note',{method:'POST',body:JSON.stringify({token:currentEditToken,token_type:currentEditTokenType,note})}));try{const results=await Promise.all(promises);const allSuccess=results.every(r=>r&&r.ok);if(allSuccess){closeEditModal();await refreshTokens();showToast('信息更新成功','success')}else{showToast('部分更新失败，请重试','error')}}catch(e){showToast('更新失败: '+e.message,'error')}}
+        submitEditInfo=async()=>{if(!currentEditToken)return;const tagsInput=$('editTagsInput').value;const note=$('editNoteInput').value.trim();const proxyUrl=$('editProxyUrl').value.trim();const cacheProxyUrl=$('editCacheProxyUrl').value.trim();const cfClearance=$('editCfClearance').value.trim();const tags=tagsInput.split(',').map(t=>t.trim()).filter(t=>t);const promises=[];promises.push(apiRequest('/api/tokens/tags',{method:'POST',body:JSON.stringify({token:currentEditToken,token_type:currentEditTokenType,tags})}));promises.push(apiRequest('/api/tokens/note',{method:'POST',body:JSON.stringify({token:currentEditToken,token_type:currentEditTokenType,note})}));promises.push(apiRequest('/api/tokens/proxy',{method:'POST',body:JSON.stringify({token:currentEditToken,token_type:currentEditTokenType,proxy_url:proxyUrl||null,cache_proxy_url:cacheProxyUrl||null,cf_clearance:cfClearance||null})}));try{const results=await Promise.all(promises);const allSuccess=results.every(r=>r&&r.ok);if(allSuccess){closeEditModal();await refreshTokens();showToast('信息更新成功','success')}else{showToast('部分更新失败，请重试','error')}}catch(e){showToast('更新失败: '+e.message,'error')}}
         
         testToken=async(token,tokenType)=>{const btn=event.target.closest('button');const originalHtml=btn.innerHTML;btn.disabled=true;btn.innerHTML='<svg class="h-3.5 w-3.5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>';try{const r=await apiRequest('/api/tokens/test',{method:'POST',body:JSON.stringify({token,token_type:tokenType})});if(!r)return;const d=await r.json();if(d.success&&d.data.valid){showToast(`Token有效！剩余: ${d.data.remaining_queries===-1?'无限制':d.data.remaining_queries}次`,'success');await refreshTokens()}else{const errMsgs={expired:'Token已失效 (401错误)',blocked:'服务器被block，请稍后再试或更换IP',limited:'Token已被限流'};showToast(errMsgs[d.data?.error_type]||'Token无效或已失效','error')}}catch(e){showToast('测试失败: '+e.message,'error')}finally{btn.disabled=false;btn.innerHTML=originalHtml}}
 

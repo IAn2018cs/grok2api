@@ -45,6 +45,9 @@ class LoginResponse(BaseModel):
 class AddTokensRequest(BaseModel):
     tokens: List[str]
     token_type: str
+    proxy_url: Optional[str] = None
+    cache_proxy_url: Optional[str] = None
+    cf_clearance: Optional[str] = None
 
 
 class DeleteTokensRequest(BaseModel):
@@ -61,6 +64,9 @@ class TokenInfo(BaseModel):
     status: str
     tags: List[str] = []
     note: str = ""
+    proxy_url: Optional[str] = None
+    cache_proxy_url: Optional[str] = None
+    cf_clearance: Optional[str] = None
 
 
 class TokenListResponse(BaseModel):
@@ -84,6 +90,14 @@ class UpdateTokenNoteRequest(BaseModel):
     token: str
     token_type: str
     note: str
+
+
+class UpdateTokenProxyRequest(BaseModel):
+    token: str
+    token_type: str
+    proxy_url: Optional[str] = None
+    cache_proxy_url: Optional[str] = None
+    cf_clearance: Optional[str] = None
 
 
 class TestTokenRequest(BaseModel):
@@ -277,7 +291,10 @@ async def list_tokens(_: bool = Depends(verify_admin_session)) -> TokenListRespo
                 heavy_remaining_queries=data.get("heavyremainingQueries", -1),
                 status=get_token_status(data, "sso"),
                 tags=data.get("tags", []),
-                note=data.get("note", "")
+                note=data.get("note", ""),
+                proxy_url=data.get("proxy_url", ""),
+                cache_proxy_url=data.get("cache_proxy_url", ""),
+                cf_clearance=data.get("cf_clearance", "")
             ))
 
         # Super Token
@@ -290,7 +307,10 @@ async def list_tokens(_: bool = Depends(verify_admin_session)) -> TokenListRespo
                 heavy_remaining_queries=data.get("heavyremainingQueries", -1),
                 status=get_token_status(data, "ssoSuper"),
                 tags=data.get("tags", []),
-                note=data.get("note", "")
+                note=data.get("note", ""),
+                proxy_url=data.get("proxy_url", ""),
+                cache_proxy_url=data.get("cache_proxy_url", ""),
+                cf_clearance=data.get("cf_clearance", "")
             ))
 
         logger.debug(f"[Admin] Token列表获取成功: {len(token_list)}个")
@@ -308,7 +328,13 @@ async def add_tokens(request: AddTokensRequest, _: bool = Depends(verify_admin_s
         logger.debug(f"[Admin] 添加Token: {request.token_type}, {len(request.tokens)}个")
 
         token_type = validate_token_type(request.token_type)
-        await token_manager.add_token(request.tokens, token_type)
+        await token_manager.add_token(
+            request.tokens,
+            token_type,
+            proxy_url=request.proxy_url,
+            cache_proxy_url=request.cache_proxy_url,
+            cf_clearance=request.cf_clearance
+        )
 
         logger.debug(f"[Admin] Token添加成功: {len(request.tokens)}个")
         return {"success": True, "message": f"成功添加 {len(request.tokens)} 个Token", "count": len(request.tokens)}
@@ -575,6 +601,37 @@ async def update_token_note(request: UpdateTokenNoteRequest, _: bool = Depends(v
     except Exception as e:
         logger.error(f"[Admin] Token备注更新异常: {e}")
         raise HTTPException(status_code=500, detail={"error": f"更新失败: {e}", "code": "UPDATE_NOTE_ERROR"})
+
+
+@router.post("/api/tokens/proxy")
+async def update_token_proxy(request: UpdateTokenProxyRequest, _: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """更新Token代理配置"""
+    try:
+        logger.debug(f"[Admin] 更新Token代理配置: {request.token[:10]}...")
+
+        token_type = validate_token_type(request.token_type)
+        await token_manager.update_token_proxy(
+            request.token,
+            token_type,
+            proxy_url=request.proxy_url,
+            cache_proxy_url=request.cache_proxy_url,
+            cf_clearance=request.cf_clearance
+        )
+
+        logger.debug(f"[Admin] Token代理配置更新成功: {request.token[:10]}...")
+        return {
+            "success": True,
+            "message": "代理配置更新成功",
+            "proxy_url": request.proxy_url or "",
+            "cache_proxy_url": request.cache_proxy_url or "",
+            "cf_clearance": request.cf_clearance or ""
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Admin] Token代理配置更新异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"更新失败: {e}", "code": "UPDATE_PROXY_ERROR"})
 
 
 @router.post("/api/tokens/test")

@@ -185,16 +185,21 @@ class GrokClient:
             raise GrokApiException("认证令牌缺失", "NO_AUTH_TOKEN")
 
         try:
-            # 构建请求
-            headers = GrokClient._build_headers(token)
+            # 获取token级别的配置（代理和CF Clearance）
+            token_config = token_manager.get_token_config(token)
+
+            # 构建请求头（使用token级CF Clearance）
+            headers = GrokClient._build_headers(token, token_config.get("cf_clearance", ""))
             if model == "grok-imagine-0.9":
                 ref_id = post_id or payload.get("fileAttachments", [""])[0]
                 if ref_id:
                     headers["Referer"] = f"https://grok.com/imagine/{ref_id}"
-            
-            proxy = setting.get_proxy("service")
+
+            # 获取代理配置（优先使用token级代理，否则使用全局代理）
+            token_proxy = token_config.get("proxy_url", "")
+            proxy = token_proxy or setting.get_proxy("service")
             proxies = {"http": proxy, "https": proxy} if proxy else None
-            
+
             # 执行请求
             response = await asyncio.to_thread(
                 curl_requests.post,
@@ -228,10 +233,16 @@ class GrokClient:
             raise GrokApiException(f"请求错误: {e}", "REQUEST_ERROR") from e
 
     @staticmethod
-    def _build_headers(token: str) -> Dict[str, str]:
-        """构建请求头"""
+    def _build_headers(token: str, cf_clearance: str = "") -> Dict[str, str]:
+        """构建请求头
+
+        Args:
+            token: auth token
+            cf_clearance: CF Clearance值，如果为空则使用全局配置
+        """
         headers = get_dynamic_headers("/rest/app-chat/conversations/new")
-        cf = setting.grok_config.get("cf_clearance", "")
+        # 优先使用token级CF Clearance，否则使用全局配置
+        cf = cf_clearance or setting.grok_config.get("cf_clearance", "")
         headers["Cookie"] = f"{token};{cf}" if cf else token
         return headers
 
