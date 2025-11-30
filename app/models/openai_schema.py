@@ -101,3 +101,51 @@ class OpenAIChatCompletionChunkResponse(BaseModel):
     model: str = Field(..., description="模型")
     system_fingerprint: Optional[str] = Field(default=None, description="系统指纹")
     choices: List[OpenAIChatCompletionChunkChoice] = Field(..., description="选项")
+
+
+class VideoGenerationRequest(BaseModel):
+    """视频生成请求"""
+    image_url: str = Field(..., description="输入图片的URL（支持http/https或base64）")
+    prompt: str = Field(..., description="视频生成提示词", min_length=1)
+    model: str = Field("grok-imagine-0.9", description="使用的视频生成模型")
+
+    @classmethod
+    @field_validator('image_url')
+    def validate_image_url(cls, v):
+        """验证图片URL格式"""
+        if not v:
+            raise HTTPException(status_code=400, detail="图片URL不能为空")
+        if not (v.startswith(('http://', 'https://', 'data:image/'))):
+            raise HTTPException(
+                status_code=400,
+                detail="图片URL必须是http/https链接或base64格式（data:image/...）"
+            )
+        return v
+
+    @classmethod
+    @field_validator('model')
+    def validate_video_model(cls, v):
+        """验证是否为视频生成模型"""
+        if not Models.is_valid_model(v):
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的模型 '{v}'"
+            )
+
+        model_info = Models.get_model_info(v)
+        if not model_info.get("is_video_model", False):
+            raise HTTPException(
+                status_code=400,
+                detail=f"模型 '{v}' 不是视频生成模型，请使用 grok-imagine-0.9"
+            )
+        return v
+
+
+class VideoGenerationResponse(BaseModel):
+    """视频生成响应"""
+    id: str = Field(..., description="任务ID")
+    model: str = Field(..., description="使用的模型")
+    created: int = Field(..., description="创建时间戳")
+    video_url: Optional[str] = Field(None, description="生成的视频URL")
+    status: str = Field("completed", description="生成状态")
+    prompt: str = Field(..., description="使用的提示词")
