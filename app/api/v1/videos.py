@@ -89,9 +89,9 @@ async def generate_video(request: VideoGenerationRequest, _: Optional[str] = Dep
 
         # 构建响应
         response = VideoGenerationResponse(
-            id=result.get("id", f"video-{int(time.time())}"),
+            id=result_dict.get("id", f"video-{int(time.time())}"),
             model=request.model,
-            created=result.get("created", int(time.time())),
+            created=result_dict.get("created", int(time.time())),
             video_url=video_url,
             status="completed",
             prompt=request.prompt
