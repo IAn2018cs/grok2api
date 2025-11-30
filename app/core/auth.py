@@ -73,6 +73,10 @@ class AuthManager:
                     detail=_build_error(error_msg, "invalid_token")
                 )
 
+            # 保存 dirty 数据（如果有更新）
+            import asyncio
+            asyncio.create_task(api_key_manager.save_if_dirty())
+
             logger.debug(f"[Auth] API Key 认证成功: {credentials.credentials[:20]}...")
             return credentials.credentials
 

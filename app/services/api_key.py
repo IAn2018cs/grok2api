@@ -48,6 +48,7 @@ class APIKeyManager:
         if not self._initialized:
             self.api_keys: Dict[str, APIKeyInfo] = {}  # key -> APIKeyInfo
             self.storage = None
+            self._dirty = False  # 标记数据是否需要保存
             self._initialized = True
 
     def set_storage(self, storage):
@@ -89,10 +90,21 @@ class APIKeyManager:
             if self.storage:
                 await self.storage.save_api_keys(data)
                 logger.info(f"[APIKey] 已保存 {len(data)} 个 API Key")
+                self._dirty = False  # 清除 dirty 标志
             else:
                 logger.warning("[APIKey] 未设置存储引擎，数据未保存")
         except Exception as e:
             logger.error(f"[APIKey] 保存数据失败: {e}")
+
+    def _schedule_save(self):
+        """标记数据需要保存（用于同步方法中）"""
+        self._dirty = True
+
+    async def save_if_dirty(self):
+        """如果数据被标记为需要保存，则保存"""
+        if self._dirty:
+            await self._save_data()
+
 
     @staticmethod
     def generate_key() -> str:
@@ -229,9 +241,8 @@ class APIKeyManager:
             if current_time > api_key_info.expire_time:
                 # 自动标记为过期
                 api_key_info.status = "expired"
-                # 异步保存（不等待）
-                import asyncio
-                asyncio.create_task(self._save_data())
+                # 标记数据需要保存
+                self._schedule_save()
                 return False, "API Key 已过期"
 
         # 检查 IP 白名单
@@ -242,9 +253,8 @@ class APIKeyManager:
 
         # 更新最后使用时间
         api_key_info.last_used_time = int(datetime.now().timestamp() * 1000)
-        # 异步保存（不等待）
-        import asyncio
-        asyncio.create_task(self._save_data())
+        # 标记数据需要保存
+        self._schedule_save()
 
         return True, ""
 
