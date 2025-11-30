@@ -45,6 +45,16 @@ class BaseStorage(ABC):
         """保存配置数据"""
         pass
 
+    @abstractmethod
+    async def load_api_keys(self) -> Dict[str, Any]:
+        """加载API Key数据"""
+        pass
+
+    @abstractmethod
+    async def save_api_keys(self, data: Dict[str, Any]) -> None:
+        """保存API Key数据"""
+        pass
+
 
 class FileStorage(BaseStorage):
     """文件存储"""
@@ -53,8 +63,10 @@ class FileStorage(BaseStorage):
         self.data_dir = data_dir
         self.token_file = data_dir / "token.json"
         self.config_file = data_dir / "setting.toml"
+        self.api_key_file = data_dir / "api_keys.json"
         self._token_lock = asyncio.Lock()
         self._config_lock = asyncio.Lock()
+        self._api_key_lock = asyncio.Lock()
 
     async def init_db(self) -> None:
         """初始化文件存储"""
@@ -71,6 +83,10 @@ class FileStorage(BaseStorage):
             }
             await self._write(self.config_file, toml.dumps(default))
             logger.info("[Storage] 创建配置文件")
+
+        if not self.api_key_file.exists():
+            await self._write(self.api_key_file, orjson.dumps({}, option=orjson.OPT_INDENT_2).decode())
+            logger.info("[Storage] 创建API Key文件")
 
     async def _read(self, path: Path) -> str:
         """读取文件"""
@@ -137,6 +153,14 @@ class FileStorage(BaseStorage):
     async def save_config(self, data: Dict[str, Any]) -> None:
         """保存配置"""
         await self._save_toml(self.config_file, data, self._config_lock)
+
+    async def load_api_keys(self) -> Dict[str, Any]:
+        """加载API Key"""
+        return await self._load_json(self.api_key_file, {}, self._api_key_lock)
+
+    async def save_api_keys(self, data: Dict[str, Any]) -> None:
+        """保存API Key"""
+        await self._save_json(self.api_key_file, data, self._api_key_lock)
 
 
 class MysqlStorage(BaseStorage):
@@ -222,6 +246,14 @@ class MysqlStorage(BaseStorage):
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """,
+            "grok_api_keys": """
+                CREATE TABLE IF NOT EXISTS grok_api_keys (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    data JSON NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """
         }
 
@@ -236,19 +268,32 @@ class MysqlStorage(BaseStorage):
     async def _sync_data(self) -> None:
         """同步数据"""
         try:
-            for table, key in [("grok_tokens", "sso"), ("grok_settings", "global")]:
+            for table, key in [("grok_tokens", "sso"), ("grok_settings", "global"), ("grok_api_keys", None)]:
                 data = await self._load_db(table)
                 if data:
                     if table == "grok_tokens":
                         await self._file.save_tokens(data)
-                    else:
+                    elif table == "grok_settings":
                         await self._file.save_config(data)
+                    else:  # grok_api_keys
+                        await self._file.save_api_keys(data)
                     logger.info(f"[Storage] {table.split('_')[1]}数据已从DB同步")
                 else:
-                    file_data = await (self._file.load_tokens() if table == "grok_tokens" else self._file.load_config())
-                    if file_data.get(key) or (table == "grok_tokens" and file_data.get("ssoSuper")):
-                        await self._save_db(table, file_data)
-                        logger.info(f"[Storage] {table.split('_')[1]}数据已初始化到DB")
+                    if table == "grok_tokens":
+                        file_data = await self._file.load_tokens()
+                        if file_data.get("sso") or file_data.get("ssoSuper"):
+                            await self._save_db(table, file_data)
+                            logger.info(f"[Storage] {table.split('_')[1]}数据已初始化到DB")
+                    elif table == "grok_settings":
+                        file_data = await self._file.load_config()
+                        if file_data.get("global"):
+                            await self._save_db(table, file_data)
+                            logger.info(f"[Storage] {table.split('_')[1]}数据已初始化到DB")
+                    else:  # grok_api_keys
+                        file_data = await self._file.load_api_keys()
+                        if file_data:
+                            await self._save_db(table, file_data)
+                            logger.info(f"[Storage] api_keys数据已初始化到DB")
         except Exception as e:
             logger.warning(f"[Storage] 同步失败: {e}")
 
@@ -299,6 +344,15 @@ class MysqlStorage(BaseStorage):
         await self._file.save_config(data)
         await self._save_db("grok_settings", data)
 
+    async def load_api_keys(self) -> Dict[str, Any]:
+        """加载API Key"""
+        return await self._file.load_api_keys()
+
+    async def save_api_keys(self, data: Dict[str, Any]) -> None:
+        """保存API Key"""
+        await self._file.save_api_keys(data)
+        await self._save_db("grok_api_keys", data)
+
     async def close(self) -> None:
         """关闭连接"""
         if self._pool:
@@ -345,19 +399,26 @@ class RedisStorage(BaseStorage):
         try:
             for key, file_func, key_name in [
                 ("grok:tokens", self._file.load_tokens, "sso"),
-                ("grok:settings", self._file.load_config, "global")
+                ("grok:settings", self._file.load_config, "global"),
+                ("grok:api_keys", self._file.load_api_keys, None)
             ]:
                 data = await self._redis.get(key)
                 if data:
                     parsed = orjson.loads(data)
                     if key == "grok:tokens":
                         await self._file.save_tokens(parsed)
-                    else:
+                    elif key == "grok:settings":
                         await self._file.save_config(parsed)
+                    else:  # grok:api_keys
+                        await self._file.save_api_keys(parsed)
                     logger.info(f"[Storage] {key.split(':')[1]}数据已从Redis同步")
                 else:
                     file_data = await file_func()
-                    if file_data.get(key_name) or (key == "grok:tokens" and file_data.get("ssoSuper")):
+                    if key == "grok:api_keys":
+                        if file_data:
+                            await self._redis.set(key, orjson.dumps(file_data).decode())
+                            logger.info(f"[Storage] api_keys数据已初始化到Redis")
+                    elif file_data.get(key_name) or (key == "grok:tokens" and file_data.get("ssoSuper")):
                         await self._redis.set(key, orjson.dumps(file_data).decode())
                         logger.info(f"[Storage] {key.split(':')[1]}数据已初始化到Redis")
         except Exception as e:
@@ -388,6 +449,15 @@ class RedisStorage(BaseStorage):
         """保存配置"""
         await self._file.save_config(data)
         await self._save_redis("grok:settings", data)
+
+    async def load_api_keys(self) -> Dict[str, Any]:
+        """加载API Key"""
+        return await self._file.load_api_keys()
+
+    async def save_api_keys(self, data: Dict[str, Any]) -> None:
+        """保存API Key"""
+        await self._file.save_api_keys(data)
+        await self._save_redis("grok:api_keys", data)
 
     async def close(self) -> None:
         """关闭连接"""

@@ -105,6 +105,24 @@ class TestTokenRequest(BaseModel):
     token_type: str
 
 
+class CreateAPIKeyRequest(BaseModel):
+    note: str = ""
+    expire_time: Optional[int] = None
+    ip_whitelist: Optional[List[str]] = None
+
+
+class UpdateAPIKeyRequest(BaseModel):
+    key: str
+    note: Optional[str] = None
+    expire_time: Optional[int] = None
+    ip_whitelist: Optional[List[str]] = None
+    status: Optional[str] = None
+
+
+class DeleteAPIKeyRequest(BaseModel):
+    key: str
+
+
 # === 辅助函数 ===
 
 def validate_token_type(token_type_str: str) -> TokenType:
@@ -677,3 +695,149 @@ async def test_token(request: TestTokenRequest, _: bool = Depends(verify_admin_s
     except Exception as e:
         logger.error(f"[Admin] Token测试异常: {e}")
         raise HTTPException(status_code=500, detail={"error": f"测试失败: {e}", "code": "TEST_TOKEN_ERROR"})
+
+
+# === API Key 管理接口 ===
+
+@router.get("/api/api-keys")
+async def get_api_keys(_: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """获取所有 API Key 列表"""
+    try:
+        from app.services.api_key import api_key_manager
+
+        api_keys = api_key_manager.get_all_api_keys()
+
+        # 转换为字典格式
+        data = []
+        for api_key_info in api_keys:
+            data.append({
+                "key": api_key_info.key,
+                "note": api_key_info.note,
+                "expire_time": api_key_info.expire_time,
+                "ip_whitelist": api_key_info.ip_whitelist,
+                "created_time": api_key_info.created_time,
+                "last_used_time": api_key_info.last_used_time,
+                "status": api_key_info.status
+            })
+
+        logger.debug(f"[Admin] 获取API Key列表: {len(data)}个")
+        return {
+            "success": True,
+            "data": data,
+            "total": len(data)
+        }
+
+    except Exception as e:
+        logger.error(f"[Admin] 获取API Key列表异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"获取失败: {e}", "code": "GET_API_KEYS_ERROR"})
+
+
+@router.post("/api/api-keys/create")
+async def create_api_key(request: CreateAPIKeyRequest, _: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """创建新的 API Key"""
+    try:
+        from app.services.api_key import api_key_manager
+
+        # 创建 API Key
+        api_key_info = await api_key_manager.create_api_key(
+            note=request.note,
+            expire_time=request.expire_time,
+            ip_whitelist=request.ip_whitelist
+        )
+
+        logger.info(f"[Admin] 创建API Key: {api_key_info.key[:20]}..., 备注: {request.note}")
+
+        return {
+            "success": True,
+            "message": "API Key 创建成功",
+            "data": {
+                "key": api_key_info.key,
+                "note": api_key_info.note,
+                "expire_time": api_key_info.expire_time,
+                "ip_whitelist": api_key_info.ip_whitelist,
+                "created_time": api_key_info.created_time,
+                "status": api_key_info.status
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"[Admin] 创建API Key异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"创建失败: {e}", "code": "CREATE_API_KEY_ERROR"})
+
+
+@router.put("/api/api-keys/update")
+async def update_api_key(request: UpdateAPIKeyRequest, _: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """更新 API Key"""
+    try:
+        from app.services.api_key import api_key_manager
+
+        # 更新 API Key
+        success = await api_key_manager.update_api_key(
+            key=request.key,
+            note=request.note,
+            expire_time=request.expire_time,
+            ip_whitelist=request.ip_whitelist,
+            status=request.status
+        )
+
+        if not success:
+            raise HTTPException(status_code=404, detail={"error": "API Key 不存在", "code": "API_KEY_NOT_FOUND"})
+
+        logger.info(f"[Admin] 更新API Key: {request.key[:20]}...")
+
+        return {
+            "success": True,
+            "message": "API Key 更新成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Admin] 更新API Key异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"更新失败: {e}", "code": "UPDATE_API_KEY_ERROR"})
+
+
+@router.delete("/api/api-keys/delete")
+async def delete_api_key(request: DeleteAPIKeyRequest, _: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """删除 API Key"""
+    try:
+        from app.services.api_key import api_key_manager
+
+        # 删除 API Key
+        success = await api_key_manager.delete_api_key(request.key)
+
+        if not success:
+            raise HTTPException(status_code=404, detail={"error": "API Key 不存在", "code": "API_KEY_NOT_FOUND"})
+
+        logger.info(f"[Admin] 删除API Key: {request.key[:20]}...")
+
+        return {
+            "success": True,
+            "message": "API Key 删除成功"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[Admin] 删除API Key异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"删除失败: {e}", "code": "DELETE_API_KEY_ERROR"})
+
+
+@router.get("/api/api-keys/stats")
+async def get_api_keys_stats(_: bool = Depends(verify_admin_session)) -> Dict[str, Any]:
+    """获取 API Key 统计信息"""
+    try:
+        from app.services.api_key import api_key_manager
+
+        stats = api_key_manager.get_statistics()
+
+        logger.debug(f"[Admin] 获取API Key统计: {stats}")
+
+        return {
+            "success": True,
+            "data": stats
+        }
+
+    except Exception as e:
+        logger.error(f"[Admin] 获取API Key统计异常: {e}")
+        raise HTTPException(status_code=500, detail={"error": f"获取失败: {e}", "code": "GET_API_KEYS_STATS_ERROR"})

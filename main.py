@@ -8,6 +8,7 @@ from app.core.exception import register_exception_handlers
 from app.core.storage import storage_manager
 from app.core.config import setting
 from app.services.grok.token import token_manager
+from app.services.api_key import api_key_manager
 from app.api.v1.chat import router as chat_router
 from app.api.v1.models import router as models_router
 from app.api.v1.images import router as images_router
@@ -40,10 +41,12 @@ async def lifespan(app: FastAPI):
     storage = storage_manager.get_storage()
     setting.set_storage(storage)
     token_manager.set_storage(storage)
-    
+    api_key_manager.set_storage(storage)
+
     # 重新加载配置和token数据
     await setting.reload()
     token_manager._load_data()
+    await api_key_manager._load_data()
     logger.info("[Grok2API] 核心服务初始化完成")
 
     # 2. 管理MCP服务的生命周期
