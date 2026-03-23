@@ -52,7 +52,7 @@ function closeEditModal() {
 }
 
 async function request(url, options = {}) {
-  const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${adminKey}`, ...(options.headers || {}) };
+  const headers = { 'Content-Type': 'application/json', 'Authorization': adminKey, ...(options.headers || {}) };
   const res = await fetch(url, { ...options, headers });
   if (res.status === 401) { window.location.href = '/admin/login'; return null; }
   return res;
