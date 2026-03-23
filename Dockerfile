@@ -1,51 +1,77 @@
-# 构建阶段
-FROM python:3.11-slim AS builder
+FROM python:3.13-alpine AS builder
 
-WORKDIR /build
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
+    # 把 uv 包安装到系统 Python 环境
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 
-# 安装依赖到独立目录
-COPY requirements.txt .
-RUN pip install --no-cache-dir --only-binary=:all: --prefix=/install -r requirements.txt && \
-    find /install -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
-    find /install -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
-    find /install -type d -name "test" -exec rm -rf {} + 2>/dev/null || true && \
-    find /install -type d -name "*.dist-info" -exec sh -c 'rm -f "$1"/RECORD "$1"/INSTALLER' _ {} \; && \
-    find /install -type f -name "*.pyc" -delete && \
-    find /install -type f -name "*.pyo" -delete && \
-    find /install -name "*.so" -exec strip --strip-unneeded {} \; 2>/dev/null || true
+# 确保 uv 的 bin 目录
+ENV PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 
-# 运行阶段 - 使用最小镜像
-FROM python:3.11-slim
+RUN apk add --no-cache \
+    tzdata \
+    ca-certificates \
+    build-base \
+    linux-headers \
+    libffi-dev \
+    openssl-dev \
+    curl-dev \
+    cargo \
+    rust
 
 WORKDIR /app
 
-# 清理基础镜像中的冗余文件
-RUN rm -rf /usr/share/doc/* \
-    /usr/share/man/* \
-    /usr/share/locale/* \
-    /var/cache/apt/* \
-    /var/lib/apt/lists/* \
-    /tmp/* \
-    /var/tmp/*
+# 安装 uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# 从构建阶段复制已安装的包
-COPY --from=builder /install /usr/local
+COPY pyproject.toml uv.lock ./
 
-# 创建必要的目录
-RUN mkdir -p /app/logs /app/data/temp/image /app/data/temp/video
+RUN uv sync --frozen --no-dev --no-install-project \
+    && find /opt/venv -type d -name "__pycache__" -prune -exec rm -rf {} + \
+    && find /opt/venv -type f -name "*.pyc" -delete \
+    && find /opt/venv -type d -name "tests" -prune -exec rm -rf {} + \
+    && find /opt/venv -type d -name "test" -prune -exec rm -rf {} + \
+    && find /opt/venv -type d -name "testing" -prune -exec rm -rf {} + \
+    && find /opt/venv -type f -name "*.so" -exec strip --strip-unneeded {} + || true \
+    && rm -rf /root/.cache /tmp/uv-cache
 
-# 复制应用代码和配置文件
-COPY app/ ./app/
-COPY data/setting.toml ./data/setting.toml
-COPY main.py .
+FROM python:3.13-alpine
 
-# 创建默认的 token.json 文件
-RUN echo '{"ssoNormal": {}, "ssoSuper": {}}' > /app/data/token.json
-
-# 删除 Python 字节码和缓存
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
+    VIRTUAL_ENV=/opt/venv \
+    SERVER_HOST=0.0.0.0 \
+    SERVER_PORT=8000 \
+    SERVER_WORKERS=1
+
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+RUN apk add --no-cache \
+    tzdata \
+    ca-certificates \
+    libffi \
+    openssl \
+    libgcc \
+    libstdc++ \
+    libcurl
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+
+COPY config.defaults.toml ./
+COPY app ./app
+COPY _public ./_public
+COPY main.py ./
+COPY scripts ./scripts
+
+RUN mkdir -p /app/data /app/logs \
+    && chmod +x /app/scripts/entrypoint.sh
 
 EXPOSE 8080
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+
+CMD ["sh", "-c", "granian --interface asgi --host ${SERVER_HOST:-0.0.0.0} --port ${SERVER_PORT:-8000} --workers ${SERVER_WORKERS:-1} main:app"]

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grok2API - API Key 管理</title>
+  <link rel="icon" href="/favicon.ico">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-sans/style.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/geist@1.0.0/dist/fonts/geist-mono/style.css" rel="stylesheet">
+  <link href="/static/common/css/common.css?v=1.6.2" rel="stylesheet">
+  <link href="/static/admin/css/token.css?v=1.6.2" rel="stylesheet">
+  <link href="/static/common/css/toast.css" rel="stylesheet">
+</head>
+<body class="min-h-screen flex flex-col" style="background-color: var(--bg);">
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
+
+  <main class="space-y-6 flex-1 container mx-auto max-w-5xl px-6 py-8 fade-in">
+    <div class="space-y-6">
+      <div class="flex justify-between items-center">
+        <div>
+          <h2 class="text-2xl font-semibold tracking-tight">API Key 列表</h2>
+          <p class="text-[var(--accents-4)] mt-1 text-sm">管理调用 Grok2API 服务的 API Key。</p>
+        </div>
+        <button onclick="openCreateModal()" class="geist-button gap-2">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14"/>
+          </svg>
+          创建
+        </button>
+      </div>
+
+      <div class="h-px bg-[var(--border)]"></div>
+
+      <!-- 统计 -->
+      <div class="grid grid-cols-4 gap-4">
+        <div class="stat-card"><div class="stat-value" id="stat-total">-</div><div class="stat-label">API Key 总数</div></div>
+        <div class="stat-card"><div class="stat-value text-[var(--success)]" id="stat-active">-</div><div class="stat-label">活跃</div></div>
+        <div class="stat-card"><div class="stat-value text-[var(--warning)]" id="stat-disabled">-</div><div class="stat-label">禁用</div></div>
+        <div class="stat-card"><div class="stat-value text-[var(--error)]" id="stat-expired">-</div><div class="stat-label">过期</div></div>
+      </div>
+
+      <div class="h-px bg-[var(--border)]"></div>
+
+      <!-- 表格 -->
+      <div class="rounded-lg border border-[var(--border)] overflow-hidden">
+        <table class="w-full text-sm">
+          <thead class="bg-[var(--accents-1)]">
+            <tr>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">API Key</th>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">备注</th>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">状态</th>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">过期时间</th>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">IP 白名单</th>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">创建时间</th>
+              <th class="h-10 px-4 text-left font-medium text-[var(--accents-4)]">最后使用</th>
+              <th class="h-10 px-4 text-right font-medium text-[var(--accents-4)]">操作</th>
+            </tr>
+          </thead>
+          <tbody id="apikey-tbody" class="divide-y divide-[var(--border)]"></tbody>
+        </table>
+        <div id="apikey-empty" class="hidden flex flex-col items-center justify-center py-16 text-[var(--accents-4)]">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="mb-3 opacity-40">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          <p class="text-sm">暂无 API Key，点击右上角创建。</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 创建弹窗 -->
+  <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="bg-[var(--bg)] border border-[var(--border)] rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+      <h3 class="text-lg font-semibold">创建 API Key</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">备注</label>
+          <input id="create-note" type="text" placeholder="可选备注" class="geist-input w-full">
+        </div>
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">过期时间</label>
+          <div class="flex items-center gap-3 mb-2">
+            <input id="create-never-expire" type="checkbox" checked onchange="toggleCreateExpire(this)">
+            <label for="create-never-expire" class="text-sm">永不过期</label>
+          </div>
+          <input id="create-expire" type="datetime-local" class="geist-input w-full" disabled>
+        </div>
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">IP 白名单（每行一个，支持 CIDR）</label>
+          <textarea id="create-ips" rows="3" placeholder="留空表示不限制&#10;192.168.1.100&#10;10.0.0.0/24" class="geist-input w-full resize-none font-mono text-xs"></textarea>
+        </div>
+      </div>
+      <div class="flex justify-end gap-3 pt-2">
+        <button onclick="closeCreateModal()" class="geist-button-outline">取消</button>
+        <button onclick="submitCreate()" class="geist-button">创建</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑弹窗 -->
+  <div id="edit-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+    <div class="bg-[var(--bg)] border border-[var(--border)] rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+      <h3 class="text-lg font-semibold">编辑 API Key</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">API Key</label>
+          <input id="edit-key" type="text" readonly class="geist-input w-full font-mono text-xs opacity-60">
+        </div>
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">备注</label>
+          <input id="edit-note" type="text" placeholder="可选备注" class="geist-input w-full">
+        </div>
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">状态</label>
+          <select id="edit-status" class="geist-input w-full">
+            <option value="active">活跃</option>
+            <option value="disabled">禁用</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">过期时间</label>
+          <div class="flex items-center gap-3 mb-2">
+            <input id="edit-never-expire" type="checkbox" onchange="toggleEditExpire(this)">
+            <label for="edit-never-expire" class="text-sm">永不过期</label>
+          </div>
+          <input id="edit-expire" type="datetime-local" class="geist-input w-full">
+        </div>
+        <div>
+          <label class="text-sm font-medium text-[var(--accents-4)] block mb-1">IP 白名单（每行一个）</label>
+          <textarea id="edit-ips" rows="3" placeholder="留空表示不限制" class="geist-input w-full resize-none font-mono text-xs"></textarea>
+        </div>
+      </div>
+      <div class="flex justify-end gap-3 pt-2">
+        <button onclick="closeEditModal()" class="geist-button-outline">取消</button>
+        <button onclick="submitEdit()" class="geist-button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/common/js/toast.js"></script>
+  <script src="/static/common/js/header.js"></script>
+  <script src="/static/i18n/i18n.js"></script>
+  <script src="/static/admin/js/apikey.js?v=1.6.2"></script>
+</body>
+</html>

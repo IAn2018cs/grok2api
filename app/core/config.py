@@ -1,163 +1,401 @@
-"""配置管理器 - 管理应用配置的读写"""
+"""
+配置管理
 
-import toml
+- config.toml: 运行时配置
+- config.defaults.toml: 默认配置基线
+"""
+
+from copy import deepcopy
+import asyncio
 from pathlib import Path
-from typing import Dict, Any, Optional, Literal
+from typing import Any, Dict
+import tomllib
+
+from app.core.logger import logger
+
+DEFAULT_CONFIG_FILE = Path(__file__).parent.parent.parent / "config.defaults.toml"
 
 
-# 默认配置
-DEFAULT_GROK = {
-    "api_key": "",
-    "proxy_url": "",
-    "cache_proxy_url": "",
-    "cf_clearance": "",
-    "x_statsig_id": "",
-    "dynamic_statsig": True,
-    "filtered_tags": "xaiartifact,xai:tool_usage_card,grok:render",
-    "stream_chunk_timeout": 120,
-    "stream_total_timeout": 600,
-    "stream_first_response_timeout": 30,
-    "temporary": True,
-    "show_thinking": True
-}
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """深度合并字典: override 覆盖 base."""
+    if not isinstance(base, dict):
+        return deepcopy(override) if isinstance(override, dict) else deepcopy(base)
 
-DEFAULT_GLOBAL = {
-    "base_url": "http://localhost:8000",
-    "log_level": "INFO",
-    "image_mode": "url",
-    "admin_password": "admin",
-    "admin_username": "admin",
-    "image_cache_max_size_mb": 512,
-    "video_cache_max_size_mb": 1024
-}
+    result = deepcopy(base)
+    if not isinstance(override, dict):
+        return result
+
+    for key, val in override.items():
+        if isinstance(val, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
 
 
-class ConfigManager:
+def _migrate_deprecated_config(
+    config: Dict[str, Any], valid_sections: set
+) -> tuple[Dict[str, Any], set]:
+    """
+    迁移废弃的配置节到新配置结构
+
+    Returns:
+        (迁移后的配置, 废弃的配置节集合)
+    """
+    # 配置映射规则：旧配置 -> 新配置
+    MIGRATION_MAP = {
+        # grok.* -> 对应的新配置节
+        "grok.temporary": "app.temporary",
+        "grok.disable_memory": "app.disable_memory",
+        "grok.stream": "app.stream",
+        "grok.thinking": "app.thinking",
+        "grok.dynamic_statsig": "app.dynamic_statsig",
+        "grok.filter_tags": "app.filter_tags",
+        "grok.timeout": "voice.timeout",
+        "grok.base_proxy_url": "proxy.base_proxy_url",
+        "grok.asset_proxy_url": "proxy.asset_proxy_url",
+        "network.base_proxy_url": "proxy.base_proxy_url",
+        "network.asset_proxy_url": "proxy.asset_proxy_url",
+        "grok.cf_clearance": "proxy.cf_clearance",
+        "grok.browser": "proxy.browser",
+        "grok.user_agent": "proxy.user_agent",
+        "security.cf_clearance": "proxy.cf_clearance",
+        "security.browser": "proxy.browser",
+        "security.user_agent": "proxy.user_agent",
+        "grok.max_retry": "retry.max_retry",
+        "grok.retry_status_codes": "retry.retry_status_codes",
+        "grok.retry_backoff_base": "retry.retry_backoff_base",
+        "grok.retry_backoff_factor": "retry.retry_backoff_factor",
+        "grok.retry_backoff_max": "retry.retry_backoff_max",
+        "grok.retry_budget": "retry.retry_budget",
+        "grok.video_idle_timeout": "video.stream_timeout",
+        "grok.image_ws_nsfw": "image.nsfw",
+        "grok.image_ws_blocked_seconds": "image.final_timeout",
+        "grok.image_ws_final_min_bytes": "image.final_min_bytes",
+        "grok.image_ws_medium_min_bytes": "image.medium_min_bytes",
+        # legacy sections
+        "network.base_proxy_url": "proxy.base_proxy_url",
+        "network.asset_proxy_url": "proxy.asset_proxy_url",
+        "network.timeout": [
+            "chat.timeout",
+            "image.timeout",
+            "video.timeout",
+            "voice.timeout",
+        ],
+        "security.cf_clearance": "proxy.cf_clearance",
+        "security.browser": "proxy.browser",
+        "security.user_agent": "proxy.user_agent",
+        "timeout.stream_idle_timeout": [
+            "chat.stream_timeout",
+            "image.stream_timeout",
+            "video.stream_timeout",
+        ],
+        "timeout.video_idle_timeout": "video.stream_timeout",
+        "image.image_ws_nsfw": "image.nsfw",
+        "image.image_ws_blocked_seconds": "image.final_timeout",
+        "image.image_ws_final_min_bytes": "image.final_min_bytes",
+        "image.image_ws_medium_min_bytes": "image.medium_min_bytes",
+        "performance.assets_max_concurrent": [
+            "asset.upload_concurrent",
+            "asset.download_concurrent",
+            "asset.list_concurrent",
+            "asset.delete_concurrent",
+        ],
+        "performance.assets_delete_batch_size": "asset.delete_batch_size",
+        "performance.assets_batch_size": "asset.list_batch_size",
+        "performance.media_max_concurrent": ["chat.concurrent", "video.concurrent"],
+        "performance.usage_max_concurrent": "usage.concurrent",
+        "performance.usage_batch_size": "usage.batch_size",
+        "performance.nsfw_max_concurrent": "nsfw.concurrent",
+        "performance.nsfw_batch_size": "nsfw.batch_size",
+    }
+
+    deprecated_sections = set(config.keys()) - valid_sections
+    if not deprecated_sections:
+        return config, set()
+
+    result = {k: deepcopy(v) for k, v in config.items() if k in valid_sections}
+    migrated_count = 0
+
+    # 处理废弃配置节或旧配置键
+    for old_section, old_values in config.items():
+        if not isinstance(old_values, dict):
+            continue
+        for old_key, old_value in old_values.items():
+            old_path = f"{old_section}.{old_key}"
+            new_paths = MIGRATION_MAP.get(old_path)
+            if not new_paths:
+                continue
+            if isinstance(new_paths, str):
+                new_paths = [new_paths]
+            for new_path in new_paths:
+                try:
+                    new_section, new_key = new_path.split(".", 1)
+                    if new_section not in result:
+                        result[new_section] = {}
+                    if new_key not in result[new_section]:
+                        result[new_section][new_key] = old_value
+                    migrated_count += 1
+                    logger.debug(
+                        f"Migrated config: {old_path} -> {new_path} = {old_value}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Skip config migration for {old_path}: {e}"
+                    )
+                    continue
+            if isinstance(result.get(old_section), dict):
+                result[old_section].pop(old_key, None)
+
+    # 兼容旧 chat.* 配置键迁移到 app.*
+    legacy_chat_map = {
+        "temporary": "temporary",
+        "disable_memory": "disable_memory",
+        "stream": "stream",
+        "thinking": "thinking",
+        "dynamic_statsig": "dynamic_statsig",
+        "filter_tags": "filter_tags",
+    }
+    chat_section = config.get("chat")
+    if isinstance(chat_section, dict):
+        app_section = result.setdefault("app", {})
+        for old_key, new_key in legacy_chat_map.items():
+            if old_key in chat_section and new_key not in app_section:
+                app_section[new_key] = chat_section[old_key]
+                if isinstance(result.get("chat"), dict):
+                    result["chat"].pop(old_key, None)
+                migrated_count += 1
+                logger.debug(
+                    f"Migrated config: chat.{old_key} -> app.{new_key} = {chat_section[old_key]}"
+                )
+
+    if migrated_count > 0:
+        logger.info(
+            f"Migrated {migrated_count} config items from deprecated/legacy sections"
+        )
+
+    return result, deprecated_sections
+
+
+def _prune_unknown_config(
+    config: Dict[str, Any], defaults: Dict[str, Any]
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Remove unknown config sections/keys that are not present in defaults.
+
+    Returns:
+        (pruned_config, removed_items)
+    """
+    if not isinstance(config, dict):
+        return {}, {"__root__": config}
+
+    pruned: Dict[str, Any] = {}
+    removed: Dict[str, Any] = {}
+
+    for section, value in config.items():
+        if section not in defaults:
+            removed[section] = value
+            continue
+
+        default_section = defaults.get(section)
+        if isinstance(default_section, dict) and isinstance(value, dict):
+            allowed_keys = set(default_section.keys())
+            kept = {k: v for k, v in value.items() if k in allowed_keys}
+            extra = {k: v for k, v in value.items() if k not in allowed_keys}
+            if extra:
+                removed[section] = extra
+            if kept:
+                pruned[section] = kept
+        else:
+            pruned[section] = value
+
+    return pruned, removed
+
+
+def _summarize_removed(removed: Dict[str, Any]) -> Dict[str, list]:
+    summary: Dict[str, list] = {}
+    for section, value in removed.items():
+        if isinstance(value, dict):
+            summary[section] = list(value.keys())
+        else:
+            summary[section] = ["<section>"]
+    return summary
+
+
+def _load_defaults() -> Dict[str, Any]:
+    """加载默认配置文件"""
+    if not DEFAULT_CONFIG_FILE.exists():
+        return {}
+    try:
+        with DEFAULT_CONFIG_FILE.open("rb") as f:
+            return tomllib.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load defaults from {DEFAULT_CONFIG_FILE}: {e}")
+        return {}
+
+
+class Config:
     """配置管理器"""
 
-    def __init__(self) -> None:
-        """初始化配置"""
-        self.config_path: Path = Path(__file__).parents[2] / "data" / "setting.toml"
-        self._storage: Optional[Any] = None
-        self._ensure_exists()
-        self.global_config: Dict[str, Any] = self.load("global")
-        self.grok_config: Dict[str, Any] = self.load("grok")
-    
-    def _ensure_exists(self) -> None:
-        """确保配置存在"""
-        if not self.config_path.exists():
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            self._create_default()
-    
-    def _create_default(self) -> None:
-        """创建默认配置"""
-        default = {"grok": DEFAULT_GROK.copy(), "global": DEFAULT_GLOBAL.copy()}
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            toml.dump(default, f)
-    
-    def _normalize_proxy(self, proxy: str) -> str:
-        """标准化代理URL（socks5:// → socks5h://）"""
-        if proxy and proxy.startswith("socks5://"):
-            return proxy.replace("socks5://", "socks5h://", 1)
-        return proxy
-    
-    def _normalize_cf(self, cf: str) -> str:
-        """标准化CF Clearance（自动添加前缀）"""
-        if cf and not cf.startswith("cf_clearance="):
-            return f"cf_clearance={cf}"
-        return cf
+    _instance = None
+    _config = {}
 
-    def set_storage(self, storage: Any) -> None:
-        """设置存储实例"""
-        self._storage = storage
+    def __init__(self):
+        self._config = {}
+        self._defaults = {}
+        self._code_defaults = {}
+        self._defaults_loaded = False
+        self._loaded = False
+        self._load_lock = asyncio.Lock()
 
-    def load(self, section: Literal["global", "grok"]) -> Dict[str, Any]:
-        """加载配置节"""
+    def register_defaults(self, defaults: Dict[str, Any]):
+        """注册代码中定义的默认值"""
+        self._code_defaults = _deep_merge(self._code_defaults, defaults)
+
+    def _ensure_defaults(self):
+        if self._defaults_loaded:
+            return
+        file_defaults = _load_defaults()
+        # 合并文件默认值和代码默认值（代码默认值优先级更低）
+        self._defaults = _deep_merge(self._code_defaults, file_defaults)
+        self._defaults_loaded = True
+
+    async def load(self):
+        """显式加载配置"""
         try:
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                config = toml.load(f)[section]
+            from app.core.storage import get_storage, LocalStorage
 
-            # 标准化Grok配置
-            if section == "grok":
-                if "proxy_url" in config:
-                    config["proxy_url"] = self._normalize_proxy(config["proxy_url"])
-                if "cf_clearance" in config:
-                    config["cf_clearance"] = self._normalize_cf(config["cf_clearance"])
+            self._ensure_defaults()
 
-            return config
+            storage = get_storage()
+            config_data = await storage.load_config()
+            from_remote = True
+
+            # 从本地 data/config.toml 初始化后端
+            if config_data is None:
+                local_storage = LocalStorage()
+                from_remote = False
+                try:
+                    # 尝试读取本地配置
+                    config_data = await local_storage.load_config()
+                except Exception as e:
+                    logger.info(f"Failed to auto-init config from local: {e}")
+                    config_data = {}
+
+            config_data = config_data or {}
+
+            # 检查是否有废弃的配置节
+            valid_sections = set(self._defaults.keys())
+            config_data, deprecated_sections = _migrate_deprecated_config(
+                config_data, valid_sections
+            )
+            if deprecated_sections:
+                logger.info(
+                    f"Cleaned deprecated config sections: {deprecated_sections}"
+                )
+
+            config_data, removed_items = _prune_unknown_config(
+                config_data, self._defaults
+            )
+            if removed_items:
+                logger.info(
+                    "Removed unknown config items: {}",
+                    _summarize_removed(removed_items),
+                )
+
+            merged = _deep_merge(self._defaults, config_data)
+
+            # 自动回填缺失配置到存储
+            # 或迁移了配置后需要更新
+            # 保护：当远程存储返回 None 且本地也没有可迁移配置时，不覆盖远程配置，避免误重置。
+            has_local_seed = bool(config_data)
+            allow_bootstrap_empty_remote = (
+                (not from_remote) and has_local_seed
+            )
+            should_persist = (
+                allow_bootstrap_empty_remote
+                or (merged != config_data and bool(config_data))
+                or deprecated_sections
+                or removed_items
+            )
+            if should_persist:
+                async with storage.acquire_lock("config_save", timeout=10):
+                    await storage.save_config(merged)
+                if not from_remote and has_local_seed:
+                    logger.info(
+                        f"Initialized remote storage ({storage.__class__.__name__}) with config baseline."
+                    )
+                if deprecated_sections:
+                    logger.info("Configuration automatically migrated and cleaned.")
+            elif not from_remote and not has_local_seed:
+                logger.warning(
+                    "Skip persisting defaults: empty config source detected, keep runtime merged config only."
+                )
+
+            self._config = merged
+            self._loaded = True
         except Exception as e:
-            raise Exception(f"[Setting] 配置加载失败: {e}") from e
-    
-    async def reload(self) -> None:
-        """重新加载配置"""
-        self.global_config = self.load("global")
-        self.grok_config = self.load("grok")
-    
-    async def _save_file(self, updates: Dict[str, Dict[str, Any]]) -> None:
-        """保存到文件"""
-        import aiofiles
-        
-        async with aiofiles.open(self.config_path, "r", encoding="utf-8") as f:
-            config = toml.loads(await f.read())
-        
-        for section, data in updates.items():
-            if section in config:
-                config[section].update(data)
-        
-        async with aiofiles.open(self.config_path, "w", encoding="utf-8") as f:
-            await f.write(toml.dumps(config))
-    
-    async def _save_storage(self, updates: Dict[str, Dict[str, Any]]) -> None:
-        """保存到存储"""
-        config = await self._storage.load_config()
-        
-        for section, data in updates.items():
-            if section in config:
-                config[section].update(data)
-        
-        await self._storage.save_config(config)
-    
-    def _prepare_grok(self, grok: Dict[str, Any]) -> Dict[str, Any]:
-        """准备Grok配置（移除前缀）"""
-        processed = grok.copy()
-        if "cf_clearance" in processed:
-            cf = processed["cf_clearance"]
-            if cf and cf.startswith("cf_clearance="):
-                processed["cf_clearance"] = cf.replace("cf_clearance=", "", 1)
-        return processed
+            logger.error(f"Error loading config: {e}")
+            self._config = {}
+            self._loaded = False
 
-    async def save(self, global_config: Optional[Dict[str, Any]] = None, grok_config: Optional[Dict[str, Any]] = None) -> None:
-        """保存配置"""
-        updates = {}
-        
-        if global_config:
-            updates["global"] = global_config
-        if grok_config:
-            updates["grok"] = self._prepare_grok(grok_config)
-        
-        # 选择存储方式
-        if self._storage:
-            await self._save_storage(updates)
-        else:
-            await self._save_file(updates)
-        
-        await self.reload()
-    
-    def get_proxy(self, proxy_type: Literal["service", "cache"] = "service") -> str:
-        """获取代理URL
-        
-        Args:
-            proxy_type: 代理类型
-                - service: 服务代理（client/upload）
-                - cache: 缓存代理（cache）
+    async def ensure_loaded(self):
+        """确保配置至少成功加载一次（按需懒加载，线程安全）"""
+        if self._loaded:
+            return
+        async with self._load_lock:
+            if self._loaded:
+                return
+            await self.load()
+
+    def get(self, key: str, default: Any = None) -> Any:
         """
-        if proxy_type == "cache":
-            cache_proxy = self.grok_config.get("cache_proxy_url", "")
-            if cache_proxy:
-                return cache_proxy
-        
-        return self.grok_config.get("proxy_url", "")
+        获取配置值
+
+        Args:
+            key: 配置键，格式 "section.key"
+            default: 默认值
+        """
+        if "." in key:
+            try:
+                section, attr = key.split(".", 1)
+                return self._config.get(section, {}).get(attr, default)
+            except (ValueError, AttributeError):
+                return default
+
+        return self._config.get(key, default)
+
+    async def update(self, new_config: dict):
+        """更新配置"""
+        from app.core.storage import get_storage
+
+        storage = get_storage()
+        async with storage.acquire_lock("config_save", timeout=10):
+            self._ensure_defaults()
+            base = _deep_merge(self._defaults, self._config or {})
+            merged = _deep_merge(base, new_config or {})
+            merged, removed_items = _prune_unknown_config(merged, self._defaults)
+            if removed_items:
+                logger.info(
+                    "Removed unknown config items on update: {}",
+                    _summarize_removed(removed_items),
+                )
+            await storage.save_config(merged)
+            self._config = merged
 
 
-# 全局实例
-setting = ConfigManager()
+# 全局配置实例
+config = Config()
+
+
+def get_config(key: str, default: Any = None) -> Any:
+    """获取配置"""
+    return config.get(key, default)
+
+
+def register_defaults(defaults: Dict[str, Any]):
+    """注册默认配置"""
+    config.register_defaults(defaults)
+
+
+__all__ = ["Config", "config", "get_config", "register_defaults"]
