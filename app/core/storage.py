@@ -881,17 +881,19 @@ class SQLStorage(BaseStorage):
             logger.warning(f"SQLStorage: 旧数据回填失败: {e}")
 
     async def _migrate_from_v1_schema(self):
-        """从 v1 旧版 grok_tokens / grok_settings 表迁移到新 schema
+        """从 v1 旧版 grok_tokens / grok_settings / grok_api_keys 表迁移到新 schema
 
         旧版表结构 (old main branch):
-          grok_tokens  (id, data JSON, ...)  — data 字段存整个 token 字典
+          grok_tokens   (id, data JSON, ...)  — data 字段存整个 token 字典
           grok_settings (id, data JSON, ...) — data 字段存整个配置字典
+          grok_api_keys (id, data JSON, ...) — data 字段存 {key: APIKeyInfo} 字典
 
         新版表结构:
           tokens     (token PK, pool_name, status, quota, ...)
           app_config (section, key_name, value)
+          api_keys.json (本地文件)
 
-        迁移完成后将旧表重命名为 grok_tokens_v1_bak / grok_settings_v1_bak。
+        迁移完成后将旧表重命名为 *_v1_bak。
         """
         from sqlalchemy import text
 
@@ -1070,6 +1072,45 @@ class SQLStorage(BaseStorage):
         except Exception as e:
             logger.warning(f"SQLStorage: v1 配置迁移失败: {e}")
 
+        # ── 4.5. 迁移 grok_api_keys → api_keys.json ──────────────────────
+        try:
+            async with self.engine.connect() as conn:
+                if self.dialect in ("mysql", "mariadb"):
+                    res = await conn.execute(
+                        text(
+                            "SELECT COUNT(*) FROM information_schema.tables "
+                            "WHERE table_schema = DATABASE() AND table_name = 'grok_api_keys'"
+                        )
+                    )
+                else:
+                    res = await conn.execute(
+                        text(
+                            "SELECT COUNT(*) FROM information_schema.tables "
+                            "WHERE table_name = 'grok_api_keys' "
+                            "AND table_schema = current_schema()"
+                        )
+                    )
+                has_api_keys_table = bool(res.scalar())
+
+            if has_api_keys_table:
+                api_key_file = DATA_DIR / "api_keys.json"
+                if not api_key_file.exists() or api_key_file.stat().st_size <= 2:
+                    async with self.engine.connect() as conn:
+                        res = await conn.execute(
+                            text("SELECT data FROM grok_api_keys ORDER BY id DESC LIMIT 1")
+                        )
+                        akrow = res.first()
+                    if akrow and akrow[0]:
+                        raw = akrow[0]
+                        if isinstance(raw, (bytes, bytearray)):
+                            raw = raw.decode("utf-8")
+                        api_key_file.parent.mkdir(parents=True, exist_ok=True)
+                        async with aiofiles.open(api_key_file, "w", encoding="utf-8") as f:
+                            await f.write(raw)
+                        logger.info("SQLStorage: v1 API Key 迁移完成，已写入 api_keys.json")
+        except Exception as e:
+            logger.warning(f"SQLStorage: v1 API Key 迁移失败: {e}")
+
         # ── 5. 重命名旧表（标记已迁移）────────────────────────────────────
         try:
             async with self.engine.begin() as conn:
@@ -1080,6 +1121,11 @@ class SQLStorage(BaseStorage):
                         "WHERE table_schema = DATABASE() AND table_name = 'grok_settings'"
                     )
                     rename_settings = "RENAME TABLE grok_settings TO grok_settings_v1_bak"
+                    rename_api_keys_check = (
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = DATABASE() AND table_name = 'grok_api_keys'"
+                    )
+                    rename_api_keys = "RENAME TABLE grok_api_keys TO grok_api_keys_v1_bak"
                 else:
                     rename_tokens = "ALTER TABLE grok_tokens RENAME TO grok_tokens_v1_bak"
                     rename_settings_check = (
@@ -1090,14 +1136,25 @@ class SQLStorage(BaseStorage):
                     rename_settings = (
                         "ALTER TABLE grok_settings RENAME TO grok_settings_v1_bak"
                     )
+                    rename_api_keys_check = (
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_name = 'grok_api_keys' "
+                        "AND table_schema = current_schema()"
+                    )
+                    rename_api_keys = (
+                        "ALTER TABLE grok_api_keys RENAME TO grok_api_keys_v1_bak"
+                    )
 
                 await conn.execute(text(rename_tokens))
                 res = await conn.execute(text(rename_settings_check))
                 if res.scalar():
                     await conn.execute(text(rename_settings))
+                res = await conn.execute(text(rename_api_keys_check))
+                if res.scalar():
+                    await conn.execute(text(rename_api_keys))
 
             logger.info(
-                "SQLStorage: 旧表已重命名为 grok_tokens_v1_bak / grok_settings_v1_bak"
+                "SQLStorage: 旧表已重命名为 grok_tokens_v1_bak / grok_settings_v1_bak / grok_api_keys_v1_bak"
             )
         except Exception as e:
             logger.warning(f"SQLStorage: 重命名旧表失败（不影响功能）: {e}")

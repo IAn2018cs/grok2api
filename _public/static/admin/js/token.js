@@ -164,7 +164,10 @@ function processTokens(data) {
             last_fail_at: t.last_fail_at,
             last_fail_reason: t.last_fail_reason,
             last_sync_at: t.last_sync_at,
-            last_asset_clear_at: t.last_asset_clear_at
+            last_asset_clear_at: t.last_asset_clear_at,
+            proxy_url: t.proxy_url || '',
+            cache_proxy_url: t.cache_proxy_url || '',
+            cf_clearance: t.cf_clearance || ''
           };
         flatTokens.push({ ...tObj, pool: pool, _selected: false });
       });
@@ -358,7 +361,7 @@ function renderTable() {
                      <button onclick="toggleTokenEnabled(${originalIndex})" class="${toggleClass}" title="${toggleTitle}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg>
                      </button>
-                     <button onclick="openProxyModal('${item.token}', ${JSON.stringify(item.proxy_url || '')}, ${JSON.stringify(item.cache_proxy_url || '')}, ${JSON.stringify(item.cf_clearance || '')})" class="p-1 ${(item.proxy_url || item.cf_clearance) ? 'text-blue-500' : 'text-gray-400'} hover:text-blue-600 rounded" title="代理配置">
+                     <button onclick="openProxyModal('${item.token}', '${item.proxy_url || ''}', '${item.cache_proxy_url || ''}', '${item.cf_clearance || ''}')" class="p-1 ${(item.proxy_url || item.cf_clearance) ? 'text-blue-500' : 'text-gray-400'} hover:text-blue-600 rounded" title="代理配置">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M4.93 4.93a10 10 0 0 0 0 14.14"></path></svg>
                      </button>
                      <button onclick="openEditModal(${originalIndex})" class="p-1 text-gray-400 hover:text-black rounded" title="${t('common.edit')}">
