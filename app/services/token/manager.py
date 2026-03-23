@@ -879,6 +879,68 @@ class TokenManager:
             return []
         return pool.list()
 
+    def get_token_proxy_config(self, token_str: str) -> dict:
+        """
+        获取 Token 的代理配置（proxy_url / cache_proxy_url / cf_clearance）
+
+        Args:
+            token_str: Token 字符串（不含 sso= 前缀）
+
+        Returns:
+            包含 proxy_url, cache_proxy_url, cf_clearance 的字典，未配置则为空字符串
+        """
+        raw = token_str[4:] if token_str.startswith("sso=") else token_str
+        for pool in self.pools.values():
+            info = pool.get(raw)
+            if info:
+                return {
+                    "proxy_url": info.proxy_url or "",
+                    "cache_proxy_url": info.cache_proxy_url or "",
+                    "cf_clearance": info.cf_clearance or "",
+                }
+        return {"proxy_url": "", "cache_proxy_url": "", "cf_clearance": ""}
+
+    async def update_token_proxy(
+        self,
+        token_str: str,
+        *,
+        proxy_url: Optional[str] = None,
+        cache_proxy_url: Optional[str] = None,
+        cf_clearance: Optional[str] = None,
+    ) -> bool:
+        """
+        更新 Token 的代理配置
+
+        Args:
+            token_str: Token 字符串
+            proxy_url: 代理 URL（None 表示不修改）
+            cache_proxy_url: 缓存代理 URL（None 表示不修改）
+            cf_clearance: CF Clearance 值（None 表示不修改）
+
+        Returns:
+            是否找到并更新了 Token
+        """
+        raw = token_str[4:] if token_str.startswith("sso=") else token_str
+        target: Optional[TokenInfo] = None
+        for pool in self.pools.values():
+            info = pool.get(raw)
+            if info:
+                target = info
+                break
+
+        if not target:
+            return False
+
+        if proxy_url is not None:
+            target.proxy_url = proxy_url.strip() or None
+        if cache_proxy_url is not None:
+            target.cache_proxy_url = cache_proxy_url.strip() or None
+        if cf_clearance is not None:
+            target.cf_clearance = cf_clearance.strip() or None
+
+        await self._save()
+        return True
+
     async def refresh_cooling_tokens(
         self,
         *,

@@ -432,3 +432,27 @@ async def enable_nsfw_async(data: dict):
         "task_id": task.id,
         "total": len(unique_tokens),
     }
+
+
+@router.post("/tokens/proxy", dependencies=[Depends(verify_app_key)])
+async def update_token_proxy(data: dict):
+    """更新单个 Token 的代理配置（proxy_url / cache_proxy_url / cf_clearance）"""
+    token = data.get("token", "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="token is required")
+
+    proxy_url = data.get("proxy_url")
+    cache_proxy_url = data.get("cache_proxy_url")
+    cf_clearance = data.get("cf_clearance")
+
+    mgr = await get_token_manager()
+    updated = await mgr.update_token_proxy(
+        token,
+        proxy_url=proxy_url,
+        cache_proxy_url=cache_proxy_url,
+        cf_clearance=cf_clearance,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+    return {"status": "success", "message": "Token 代理配置已更新"}

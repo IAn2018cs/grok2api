@@ -75,6 +75,11 @@ class TokenInfo(BaseModel):
     note: str = ""
     last_asset_clear_at: Optional[int] = None
 
+    # 单 Token 代理配置（优先于全局代理）
+    proxy_url: Optional[str] = None
+    cache_proxy_url: Optional[str] = None
+    cf_clearance: Optional[str] = None
+
     @field_validator("token", mode="before")
     @classmethod
     def _normalize_token(cls, value):

@@ -724,6 +724,7 @@ class SQLStorage(BaseStorage):
                 except Exception:
                     pass
 
+            await self._migrate_from_v1_schema()
             await self._migrate_legacy_tokens()
             self._initialized = True
         except Exception as e:
@@ -878,6 +879,228 @@ class SQLStorage(BaseStorage):
                 await session.commit()
         except Exception as e:
             logger.warning(f"SQLStorage: 旧数据回填失败: {e}")
+
+    async def _migrate_from_v1_schema(self):
+        """从 v1 旧版 grok_tokens / grok_settings 表迁移到新 schema
+
+        旧版表结构 (old main branch):
+          grok_tokens  (id, data JSON, ...)  — data 字段存整个 token 字典
+          grok_settings (id, data JSON, ...) — data 字段存整个配置字典
+
+        新版表结构:
+          tokens     (token PK, pool_name, status, quota, ...)
+          app_config (section, key_name, value)
+
+        迁移完成后将旧表重命名为 grok_tokens_v1_bak / grok_settings_v1_bak。
+        """
+        from sqlalchemy import text
+
+        # ── 1. 检测旧表是否存在 ──────────────────────────────────────────
+        try:
+            async with self.engine.begin() as conn:
+                if self.dialect in ("mysql", "mariadb"):
+                    res = await conn.execute(
+                        text(
+                            "SELECT COUNT(*) FROM information_schema.tables "
+                            "WHERE table_schema = DATABASE() AND table_name = 'grok_tokens'"
+                        )
+                    )
+                else:
+                    res = await conn.execute(
+                        text(
+                            "SELECT COUNT(*) FROM information_schema.tables "
+                            "WHERE table_name = 'grok_tokens' "
+                            "AND table_schema = current_schema()"
+                        )
+                    )
+                if not res.scalar():
+                    return  # 无旧表，无需迁移
+        except Exception as e:
+            logger.debug(f"SQLStorage: 检测旧表失败，跳过 v1 迁移: {e}")
+            return
+
+        logger.info("SQLStorage: 检测到旧版 grok_tokens 表，开始 v1 → v2 数据迁移...")
+
+        # ── 2. 检查 tokens 是否已有数据（避免重复迁移） ─────────────────
+        try:
+            async with self.engine.connect() as conn:
+                res = await conn.execute(text("SELECT COUNT(*) FROM tokens"))
+                token_count = res.scalar() or 0
+        except Exception:
+            token_count = 0
+
+        # ── 3. 迁移 grok_tokens → tokens ─────────────────────────────────
+        if token_count == 0:
+            try:
+                async with self.engine.connect() as conn:
+                    res = await conn.execute(
+                        text("SELECT data FROM grok_tokens ORDER BY id DESC LIMIT 1")
+                    )
+                    row = res.first()
+
+                if row and row[0]:
+                    old_blob = row[0]
+                    if isinstance(old_blob, (bytes, bytearray)):
+                        old_blob = old_blob.decode("utf-8")
+                    old_data: dict = json_loads(old_blob)
+
+                    # 旧 pool 名映射: "sso" → "ssoBasic"，"ssoSuper" 不变
+                    pool_name_map = {"sso": "ssoBasic", "ssoSuper": "ssoSuper"}
+
+                    rows = []
+                    for old_pool, token_dict in old_data.items():
+                        if not isinstance(token_dict, dict):
+                            continue
+                        new_pool = pool_name_map.get(old_pool, old_pool)
+                        for token_str, meta in token_dict.items():
+                            if not isinstance(meta, dict):
+                                continue
+                            token_data = dict(meta)
+                            token_data["token"] = token_str
+                            # 旧字段映射: remainingQueries → quota
+                            if "quota" not in token_data:
+                                if "remainingQueries" in token_data:
+                                    token_data["quota"] = token_data.pop("remainingQueries")
+                                elif "remaining_queries" in token_data:
+                                    token_data["quota"] = token_data.pop("remaining_queries")
+                            # 丢弃无用的旧字段
+                            token_data.pop("heavyremainingQueries", None)
+                            token_data.pop("heavy_remaining_queries", None)
+                            rows.append(self._token_to_row(token_data, new_pool))
+
+                    if rows:
+                        if self.dialect in ("mysql", "mariadb"):
+                            upsert_sql = (
+                                "INSERT INTO tokens (token, pool_name, status, quota, created_at, "
+                                "last_used_at, use_count, fail_count, last_fail_at, "
+                                "last_fail_reason, last_sync_at, tags, note, "
+                                "last_asset_clear_at, data, data_hash, updated_at) "
+                                "VALUES (:token, :pool_name, :status, :quota, :created_at, "
+                                ":last_used_at, :use_count, :fail_count, :last_fail_at, "
+                                ":last_fail_reason, :last_sync_at, :tags, :note, "
+                                ":last_asset_clear_at, :data, :data_hash, :updated_at) "
+                                "ON DUPLICATE KEY UPDATE pool_name=VALUES(pool_name), "
+                                "status=VALUES(status), quota=VALUES(quota)"
+                            )
+                        else:
+                            upsert_sql = (
+                                "INSERT INTO tokens (token, pool_name, status, quota, created_at, "
+                                "last_used_at, use_count, fail_count, last_fail_at, "
+                                "last_fail_reason, last_sync_at, tags, note, "
+                                "last_asset_clear_at, data, data_hash, updated_at) "
+                                "VALUES (:token, :pool_name, :status, :quota, :created_at, "
+                                ":last_used_at, :use_count, :fail_count, :last_fail_at, "
+                                ":last_fail_reason, :last_sync_at, :tags, :note, "
+                                ":last_asset_clear_at, :data, :data_hash, :updated_at) "
+                                "ON CONFLICT (token) DO UPDATE SET "
+                                "pool_name=EXCLUDED.pool_name, status=EXCLUDED.status, "
+                                "quota=EXCLUDED.quota"
+                            )
+                        async with self.engine.begin() as conn:
+                            await conn.execute(text(upsert_sql), rows)
+                        logger.info(
+                            f"SQLStorage: v1 迁移完成，导入 {len(rows)} 个 Token"
+                        )
+            except Exception as e:
+                logger.warning(f"SQLStorage: v1 Token 迁移失败: {e}")
+        else:
+            logger.info(
+                f"SQLStorage: tokens 表已有 {token_count} 条记录，跳过 Token 迁移"
+            )
+
+        # ── 4. 迁移 grok_settings → app_config ───────────────────────────
+        try:
+            async with self.engine.connect() as conn:
+                res = await conn.execute(text("SELECT COUNT(*) FROM app_config"))
+                cfg_count = res.scalar() or 0
+
+            if cfg_count == 0:
+                # 检查 grok_settings 是否存在
+                async with self.engine.connect() as conn:
+                    if self.dialect in ("mysql", "mariadb"):
+                        res = await conn.execute(
+                            text(
+                                "SELECT COUNT(*) FROM information_schema.tables "
+                                "WHERE table_schema = DATABASE() AND table_name = 'grok_settings'"
+                            )
+                        )
+                    else:
+                        res = await conn.execute(
+                            text(
+                                "SELECT COUNT(*) FROM information_schema.tables "
+                                "WHERE table_name = 'grok_settings' "
+                                "AND table_schema = current_schema()"
+                            )
+                        )
+                    has_settings = bool(res.scalar())
+
+                if has_settings:
+                    async with self.engine.connect() as conn:
+                        res = await conn.execute(
+                            text("SELECT data FROM grok_settings ORDER BY id DESC LIMIT 1")
+                        )
+                        srow = res.first()
+
+                    if srow and srow[0]:
+                        old_cfg = srow[0]
+                        if isinstance(old_cfg, (bytes, bytearray)):
+                            old_cfg = old_cfg.decode("utf-8")
+                        old_cfg_dict: dict = json_loads(old_cfg)
+
+                        cfg_params = []
+                        for section, items in old_cfg_dict.items():
+                            if not isinstance(items, dict):
+                                continue
+                            for key, val in items.items():
+                                cfg_params.append(
+                                    {"s": section, "k": key, "v": json_dumps(val)}
+                                )
+                        if cfg_params:
+                            async with self.engine.begin() as conn:
+                                await conn.execute(
+                                    text(
+                                        "INSERT INTO app_config (section, key_name, value) "
+                                        "VALUES (:s, :k, :v)"
+                                    ),
+                                    cfg_params,
+                                )
+                            logger.info(
+                                f"SQLStorage: v1 配置迁移完成，导入 {len(cfg_params)} 项"
+                            )
+        except Exception as e:
+            logger.warning(f"SQLStorage: v1 配置迁移失败: {e}")
+
+        # ── 5. 重命名旧表（标记已迁移）────────────────────────────────────
+        try:
+            async with self.engine.begin() as conn:
+                if self.dialect in ("mysql", "mariadb"):
+                    rename_tokens = "RENAME TABLE grok_tokens TO grok_tokens_v1_bak"
+                    rename_settings_check = (
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = DATABASE() AND table_name = 'grok_settings'"
+                    )
+                    rename_settings = "RENAME TABLE grok_settings TO grok_settings_v1_bak"
+                else:
+                    rename_tokens = "ALTER TABLE grok_tokens RENAME TO grok_tokens_v1_bak"
+                    rename_settings_check = (
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_name = 'grok_settings' "
+                        "AND table_schema = current_schema()"
+                    )
+                    rename_settings = (
+                        "ALTER TABLE grok_settings RENAME TO grok_settings_v1_bak"
+                    )
+
+                await conn.execute(text(rename_tokens))
+                res = await conn.execute(text(rename_settings_check))
+                if res.scalar():
+                    await conn.execute(text(rename_settings))
+
+            logger.info(
+                "SQLStorage: 旧表已重命名为 grok_tokens_v1_bak / grok_settings_v1_bak"
+            )
+        except Exception as e:
+            logger.warning(f"SQLStorage: 重命名旧表失败（不影响功能）: {e}")
 
     @asynccontextmanager
     async def acquire_lock(self, name: str, timeout: int = 10):
@@ -1488,8 +1711,20 @@ class StorageFactory:
         if cls._instance:
             return cls._instance
 
-        storage_type = os.getenv("SERVER_STORAGE_TYPE", "local").lower()
-        storage_url = os.getenv("SERVER_STORAGE_URL", "")
+        # 兼容旧版环境变量名 (STORAGE_MODE / DATABASE_URL)
+        storage_type = (
+            os.getenv("SERVER_STORAGE_TYPE")
+            or os.getenv("STORAGE_MODE")
+            or "local"
+        ).lower()
+        storage_url = (
+            os.getenv("SERVER_STORAGE_URL")
+            or os.getenv("DATABASE_URL")
+            or ""
+        )
+        # 旧版 STORAGE_MODE 值映射
+        _mode_compat = {"file": "local", "mysql": "mysql", "redis": "redis"}
+        storage_type = _mode_compat.get(storage_type, storage_type)
 
         logger.info(f"StorageFactory: 初始化存储后端: {storage_type}")
 

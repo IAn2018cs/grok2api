@@ -57,12 +57,14 @@ def _sanitize_header_value(
     return normalized
 
 
-def build_sso_cookie(sso_token: str) -> str:
+def build_sso_cookie(sso_token: str, cf_clearance_override: str = "") -> str:
     """
     Build SSO Cookie string.
 
     Args:
         sso_token: str, the SSO token.
+        cf_clearance_override: str, per-token CF Clearance value. If non-empty,
+            overrides the global proxy.cf_clearance config.
 
     Returns:
         str: The SSO Cookie string.
@@ -80,8 +82,10 @@ def build_sso_cookie(sso_token: str) -> str:
     cf_cookies = _sanitize_header_value(
         get_config("proxy.cf_cookies") or "", field_name="proxy.cf_cookies"
     )
+    # Per-token cf_clearance takes priority over global config
+    raw_cf_clearance = cf_clearance_override or get_config("proxy.cf_clearance") or ""
     cf_clearance = _sanitize_header_value(
-        get_config("proxy.cf_clearance") or "",
+        raw_cf_clearance,
         field_name="proxy.cf_clearance",
         remove_all_spaces=True,
     )
@@ -202,7 +206,7 @@ def _build_client_hints(browser: Optional[str], user_agent: Optional[str]) -> Di
     return hints
 
 
-def build_ws_headers(token: Optional[str] = None, origin: Optional[str] = None, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def build_ws_headers(token: Optional[str] = None, origin: Optional[str] = None, extra: Optional[Dict[str, str]] = None, cf_clearance_override: str = "") -> Dict[str, str]:
     """
     Build headers for WebSocket requests.
 
@@ -210,6 +214,7 @@ def build_ws_headers(token: Optional[str] = None, origin: Optional[str] = None, 
         token: Optional[str], the SSO token for Cookie. Defaults to None.
         origin: Optional[str], the Origin value. Defaults to "https://grok.com" if not provided.
         extra: Optional[Dict[str, str]], extra headers to merge. Defaults to None.
+        cf_clearance_override: str, per-token CF Clearance to override global config.
 
     Returns:
         Dict[str, str]: The headers dictionary.
@@ -231,7 +236,7 @@ def build_ws_headers(token: Optional[str] = None, origin: Optional[str] = None, 
         headers.update(client_hints)
 
     if token:
-        headers["Cookie"] = build_sso_cookie(token)
+        headers["Cookie"] = build_sso_cookie(token, cf_clearance_override)
 
     if extra:
         headers.update(extra)
@@ -239,7 +244,7 @@ def build_ws_headers(token: Optional[str] = None, origin: Optional[str] = None, 
     return headers
 
 
-def build_headers(cookie_token: str, content_type: Optional[str] = None, origin: Optional[str] = None, referer: Optional[str] = None) -> Dict[str, str]:
+def build_headers(cookie_token: str, content_type: Optional[str] = None, origin: Optional[str] = None, referer: Optional[str] = None, cf_clearance_override: str = "") -> Dict[str, str]:
     """
     Build headers for reverse interfaces.
 
@@ -248,6 +253,7 @@ def build_headers(cookie_token: str, content_type: Optional[str] = None, origin:
         content_type: Optional[str], the Content-Type value.
         origin: Optional[str], the Origin value. Defaults to "https://grok.com" if not provided.
         referer: Optional[str], the Referer value. Defaults to "https://grok.com/" if not provided.
+        cf_clearance_override: str, per-token CF Clearance to override global config.
 
     Returns:
         Dict[str, str]: The headers dictionary.
@@ -275,7 +281,7 @@ def build_headers(cookie_token: str, content_type: Optional[str] = None, origin:
         headers.update(client_hints)
 
     # Cookie
-    headers["Cookie"] = build_sso_cookie(cookie_token)
+    headers["Cookie"] = build_sso_cookie(cookie_token, cf_clearance_override)
 
     # Content-Type and Accept/Sec-Fetch-Dest
     if content_type and content_type == "application/json":

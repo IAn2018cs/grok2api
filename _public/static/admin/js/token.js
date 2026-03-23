@@ -358,6 +358,9 @@ function renderTable() {
                      <button onclick="toggleTokenEnabled(${originalIndex})" class="${toggleClass}" title="${toggleTitle}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${toggleIcon}</svg>
                      </button>
+                     <button onclick="openProxyModal('${item.token}', ${JSON.stringify(item.proxy_url || '')}, ${JSON.stringify(item.cache_proxy_url || '')}, ${JSON.stringify(item.cf_clearance || '')})" class="p-1 ${(item.proxy_url || item.cf_clearance) ? 'text-blue-500' : 'text-gray-400'} hover:text-blue-600 rounded" title="代理配置">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path><path d="M4.93 4.93a10 10 0 0 0 0 14.14"></path></svg>
+                     </button>
                      <button onclick="openEditModal(${originalIndex})" class="p-1 text-gray-400 hover:text-black rounded" title="${t('common.edit')}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
                      </button>
@@ -605,6 +608,61 @@ function closeEditModal() {
       input.classList.add('bg-gray-50', 'text-gray-500');
     }
   });
+}
+
+// ========== Per-Token Proxy Modal ==========
+
+function openProxyModal(token, proxyUrl, cacheProxyUrl, cfClearance) {
+  byId('proxy-token').value = token;
+  byId('proxy-proxy-url').value = proxyUrl || '';
+  byId('proxy-cache-proxy-url').value = cacheProxyUrl || '';
+  byId('proxy-cf-clearance').value = cfClearance || '';
+  openModal('proxy-modal');
+}
+
+function closeProxyModal() {
+  closeModal('proxy-modal');
+}
+
+async function saveProxy() {
+  const token = byId('proxy-token').value.trim();
+  const proxyUrl = byId('proxy-proxy-url').value.trim();
+  const cacheProxyUrl = byId('proxy-cache-proxy-url').value.trim();
+  const cfClearance = byId('proxy-cf-clearance').value.trim();
+
+  if (!token) {
+    showToast('Token 不能为空', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/v1/admin/tokens/proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(apiKey) },
+      body: JSON.stringify({
+        token,
+        proxy_url: proxyUrl,
+        cache_proxy_url: cacheProxyUrl,
+        cf_clearance: cfClearance,
+      }),
+    });
+    if (!res.ok) {
+      const err = await readJsonResponse(res);
+      throw new Error(err?.detail || '保存失败');
+    }
+    // Update local cache
+    const target = flatTokens.find(t => t.token === token);
+    if (target) {
+      target.proxy_url = proxyUrl;
+      target.cache_proxy_url = cacheProxyUrl;
+      target.cf_clearance = cfClearance;
+    }
+    renderTable();
+    closeProxyModal();
+    showToast('代理配置已保存', 'success');
+  } catch (e) {
+    showToast(e.message || '保存失败', 'error');
+  }
 }
 
 async function saveEdit() {

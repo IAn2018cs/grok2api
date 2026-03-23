@@ -308,6 +308,44 @@
     </div>
   </div>
 
+  <!-- Proxy Modal -->
+  <div id="proxy-modal" class="modal-overlay hidden">
+    <div class="modal-content modal-md" id="proxy-modal-content">
+      <div class="modal-header">
+        <h3 class="modal-title">代理配置</h3>
+        <button onclick="closeProxyModal()" class="modal-close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="space-y-4">
+        <input type="hidden" id="proxy-token">
+        <p class="text-xs text-[var(--accents-4)]">为此 Token 单独设置代理，留空则使用全局配置。</p>
+        <div>
+          <label class="modal-label mb-1 block">Proxy URL</label>
+          <input type="text" id="proxy-proxy-url" class="geist-input font-mono"
+            placeholder="http://user:pass@host:port 或 socks5://host:port">
+        </div>
+        <div>
+          <label class="modal-label mb-1 block">Cache Proxy URL</label>
+          <input type="text" id="proxy-cache-proxy-url" class="geist-input font-mono"
+            placeholder="可选，缓存服务代理">
+        </div>
+        <div>
+          <label class="modal-label mb-1 block">CF Clearance</label>
+          <input type="text" id="proxy-cf-clearance" class="geist-input font-mono"
+            placeholder="cf_clearance cookie 值（可选）">
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button onclick="closeProxyModal()" class="geist-button-outline text-xs px-3">取消</button>
+          <button onclick="saveProxy()" class="geist-button text-xs px-3">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="confirm-dialog" class="modal-overlay confirm-dialog hidden">
     <div class="modal-content modal-md">
       <div class="confirm-dialog-body">

@@ -276,6 +276,9 @@ class GrokChatService:
         await semaphore.acquire()
         session = ResettableSession(impersonate=browser)
         try:
+            # Look up per-token proxy config
+            token_mgr = await get_token_manager()
+            proxy_cfg = token_mgr.get_token_proxy_config(token)
             stream_response = await AppChatReverse.request(
                 session,
                 token,
@@ -285,6 +288,8 @@ class GrokChatService:
                 file_attachments=file_attachments,
                 tool_overrides=tool_overrides,
                 model_config_override=model_config_override,
+                proxy_override=proxy_cfg.get("proxy_url", ""),
+                cf_clearance_override=proxy_cfg.get("cf_clearance", ""),
             )
             logger.info(f"Chat connected: model={model}, stream={stream}")
         except Exception:

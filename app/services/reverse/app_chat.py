@@ -138,9 +138,11 @@ class AppChatReverse:
         file_attachments: List[str] = None,
         tool_overrides: Dict[str, Any] = None,
         model_config_override: Dict[str, Any] = None,
+        proxy_override: str = "",
+        cf_clearance_override: str = "",
     ) -> Any:
         """Send app chat request to Grok.
-        
+
         Args:
             session: AsyncSession, the session to use for the request.
             token: str, the SSO token.
@@ -150,32 +152,20 @@ class AppChatReverse:
             file_attachments: List[str], the file attachments to send.
             tool_overrides: Dict[str, Any], the tool overrides to use.
             model_config_override: Dict[str, Any], the model config override to use.
+            proxy_override: str, per-token proxy URL (overrides global proxy if non-empty).
+            cf_clearance_override: str, per-token CF Clearance (overrides global if non-empty).
 
         Returns:
             Any: The response from the request.
         """
         try:
-            # Get proxies
-            base_proxy = get_config("proxy.base_proxy_url")
-            proxy = None
-            proxies = None
-            if base_proxy:
-                normalized_proxy = _normalize_chat_proxy(base_proxy)
-                scheme = urlparse(normalized_proxy).scheme.lower()
-                if scheme.startswith("socks"):
-                    # curl_cffi 对 SOCKS 代理优先使用 proxy 参数，避免被按 HTTP CONNECT 处理
-                    proxy = normalized_proxy
-                else:
-                    proxies = {"http": normalized_proxy, "https": normalized_proxy}
-                _log_proxy_state_once(base_proxy, normalized_proxy, scheme)
-            else:
-                _log_proxy_state_once("")
-            # Build headers
+            # Build headers (per-token cf_clearance takes priority over global)
             headers = build_headers(
                 cookie_token=token,
                 content_type="application/json",
                 origin="https://grok.com",
                 referer="https://grok.com/",
+                cf_clearance_override=cf_clearance_override,
             )
 
             # Build payload
@@ -211,18 +201,23 @@ class AppChatReverse:
 
             async def _do_request():
                 nonlocal active_proxy_key
-                active_proxy_key, base_proxy = get_current_proxy_from("proxy.base_proxy_url")
                 proxy = None
                 proxies = None
-                if base_proxy:
-                    normalized_proxy = _normalize_chat_proxy(base_proxy)
+                # Per-token proxy takes priority over the global proxy pool
+                if proxy_override:
+                    effective_proxy = proxy_override
+                    active_proxy_key = None
+                else:
+                    active_proxy_key, effective_proxy = get_current_proxy_from("proxy.base_proxy_url")
+                if effective_proxy:
+                    normalized_proxy = _normalize_chat_proxy(effective_proxy)
                     scheme = urlparse(normalized_proxy).scheme.lower()
                     if scheme.startswith("socks"):
                         # curl_cffi 对 SOCKS 代理优先使用 proxy 参数，避免被按 HTTP CONNECT 处理
                         proxy = normalized_proxy
                     else:
                         proxies = {"http": normalized_proxy, "https": normalized_proxy}
-                    _log_proxy_state_once(base_proxy, normalized_proxy, scheme)
+                    _log_proxy_state_once(effective_proxy, normalized_proxy, scheme)
                 else:
                     _log_proxy_state_once("")
                 response = await session.post(
